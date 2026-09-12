@@ -4,6 +4,36 @@
 
 ---
 
+## 0. Расширения Visual Studio Code
+
+На компьютере аудитории расширения VS Code могут отсутствовать, поэтому установите их вручную до начала работы с проектом.
+
+Откройте VS Code и нажмите значок **Extensions** слева или сочетание клавиш `Ctrl+Shift+X`. В поле поиска по очереди найдите каждое расширение и нажмите **Install**.
+
+### Обязательные расширения
+
+1. **Python**
+    - идентификатор: `ms-python.python`;
+    - издатель: **Microsoft**;
+    - нужен для запуска Python, выбора интерпретатора, запуска файлов и работы с `.venv`.
+
+2. **Pylance**
+    - идентификатор: `ms-python.vscode-pylance`;
+    - издатель: **Microsoft**;
+    - нужен для подсказок кода, перехода по определениям, проверки типов и обнаружения ошибок Python.
+
+### Порядок установки
+
+1. Откройте **Extensions** через `Ctrl+Shift+X`.
+2. Найдите `Python` от издателя **Microsoft** и нажмите **Install**.
+3. Найдите `Pylance` от издателя **Microsoft** и нажмите **Install**.
+4. Перезапустите VS Code, если он предложит это сделать.
+5. Откройте папку проекта через **File -> Open Folder**.
+
+Отдельное расширение PostgreSQL для этого проекта не требуется: базу данных, таблицу и тестовые записи мы создаём через установленный pgAdmin 4. После установки расширения Python интерпретатор `.venv` выбирается в разделе 8.
+
+---
+
 ## 1. Что установить
 
 Установите:
@@ -57,8 +87,12 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash TEXT NOT NULL,
     is_admin BOOLEAN NOT NULL DEFAULT FALSE,
     failed_attempts INTEGER NOT NULL DEFAULT 0,
+    captcha_attempts INTEGER NOT NULL DEFAULT 0,
     locked BOOLEAN NOT NULL DEFAULT FALSE
 );
+
+ALTER TABLE users
+ADD COLUMN IF NOT EXISTS captcha_attempts INTEGER NOT NULL DEFAULT 0;
 
 4. Нажмите **Execute** или клавишу `F5`.
 
@@ -71,6 +105,7 @@ CREATE TABLE IF NOT EXISTS users (
 - `password_hash` хранит пароль учебной версии;
 - `is_admin` имеет тип Boolean и равен `TRUE` только у администратора;
 - `failed_attempts` считает неверные попытки;
+- `captcha_attempts` считает неверно собранные капчи;
 - `locked` показывает, заблокирован ли пользователь;
 - `DEFAULT FALSE` задаёт значение `FALSE`, если его не передали.
 
@@ -85,12 +120,14 @@ INSERT INTO users (
     password_hash,
     is_admin,
     failed_attempts,
+    captcha_attempts,
     locked
 )
 VALUES (
     'admin',
     'AdminPassword',
     TRUE,
+    0,
     0,
     FALSE
 )
@@ -110,12 +147,14 @@ INSERT INTO users (
     password_hash,
     is_admin,
     failed_attempts,
+    captcha_attempts,
     locked
 )
 VALUES (
     'user1',
     'UserPassword1',
     FALSE,
+    0,
     0,
     FALSE
 )
@@ -240,14 +279,16 @@ NiceGuiDBekz/
 
 1. импорты библиотек;
 2. строка подключения и пути;
-3. общая функция SQL;
-4. функция показа ошибки пароля;
-5. функция `app`, создающая общий контейнер;
-6. `login`, форма входа и капча;
-7. `enter`, проверяющая логин;
-8. `user_page`, страница обычного пользователя;
-9. `admin_page`, панель администратора;
-10. регистрация страницы и запуск сервера.
+3. порядок показа картинок и сообщение блокировки;
+4. общая функция SQL;
+5. функция обновления схемы базы;
+6. функция показа ошибки пароля;
+7. функция `app`, создающая общий контейнер;
+8. `login`, форма входа и капча;
+9. `enter`, проверяющая логин;
+10. `user_page`, страница обычного пользователя;
+11. `admin_page`, панель администратора;
+12. регистрация страницы и запуск сервера.
 
 `login`, `user_page` и `admin_page` являются вложенными функциями `app`, потому что им нужен общий контейнер `box`.
 
@@ -306,6 +347,14 @@ PARTS = range(1, 5)
 
 `range(1, 5)` создаёт последовательность `1`, `2`, `3`, `4`. Число `5` не включается.
 
+DISPLAY_ORDER = (1, 3, 2, 4)
+
+`DISPLAY_ORDER` задаёт порядок картинок в верхнем лотке. Поэтому на экране они появляются не по порядку.
+
+LOCKED_MESSAGE = 'Вы заблокированы. Обратитесь к администратору'
+
+Эта константа хранит единый текст, который показывается при блокировке по паролю или по капче.
+
 ### 10.3. Общая функция SQL
 
 def sql(q, p=(), many=False):
@@ -345,7 +394,17 @@ rows = sql(
 
 Значение передаётся отдельно от SQL. Не вставляйте логин в запрос сложением строк.
 
-### 10.4. Функция ошибки пароля
+### 10.4. Обновление схемы базы
+
+def ensure_schema():
+    with psycopg.connect(DB) as c:
+        c.execute(
+            'ALTER TABLE users '
+            'ADD COLUMN IF NOT EXISTS captcha_attempts INTEGER NOT NULL DEFAULT 0'
+        )
+`ensure_schema` нужна для уже существующих баз, созданных до добавления счётчика капч. `ADD COLUMN IF NOT EXISTS` добавляет столбец только при его отсутствии, поэтому повторный запуск безопасен. Если столбец уже есть, PostgreSQL ничего не меняет.
+
+### 10.5. Функция ошибки пароля
 
 def password_error(field, text=None):
     field.props(remove='error error-message') if text is None else field.props(
@@ -364,7 +423,7 @@ def password_error(field, text=None):
 
 `f` перед строкой позволяет вставить значение переменной `{text}` внутрь строки. Здесь формируется свойство с сообщением ошибки.
 
-### 10.5. Функция приложения и общий контейнер
+### 10.6. Функция приложения и общий контейнер
 
 def app():
     centered = 'width:100%;text-align:center'
@@ -408,7 +467,7 @@ def app():
 
 `ui.column()` создаёт вертикальный контейнер. `box` будет содержать текущий экран. `.style(...)` задаёт ширину, ограничение по ширине, выравнивание и расстояние между элементами.
 
-### 10.6. Экран входа
+### 10.7. Экран входа
 
 Эта функция должна находиться внутри `app`, поэтому перед `def` четыре пробела:
 
@@ -420,7 +479,7 @@ def app():
             msg = ui.label(note).style(centered)
 
             dragged_part = None
-            placed_parts = set()
+            placed_parts = {}
             captcha_msg = ui.label('Перетащите фрагменты на свои места').style(centered)
             captcha_area = ui.column().style('width:100%;gap:12px;align-items:center')
             image_style = (
@@ -458,13 +517,13 @@ def app():
 Создаёт пустую или переданную подпись. Позже её текст меняется через `msg.set_text(...)`. Метод `set_text` заменяет текст существующего элемента, не создавая новый элемент.
 
             dragged_part = None
-            placed_parts = set()
+            placed_parts = {}
 
-Сначала нет перетаскиваемой части. `set()` создаёт множество, в котором будут храниться правильно установленные номера без повторов.
+Сначала нет перетаскиваемой части. Словарь `placed_parts` будет хранить пары: номер слота и номер поставленной в него части.
 
 Следующие строки создают сообщение капчи, контейнер и CSS-стили картинок и слотов. Скобки позволяют разбить длинную строку на несколько физических строк.
 
-### 10.7. Лоток и обработчики капчи
+### 10.8. Лоток и обработчики капчи
 
             with captcha_area:
                 tray = ui.row().style(
@@ -489,23 +548,41 @@ def app():
                     nonlocal dragged_part
                     if dragged_part is None:
                         return
-                    if dragged_part != expected_part:
-                        captcha_msg.set_text('Неверное место. Попробуйте еще раз')
+                    if expected_part in placed_parts:
+                        captcha_msg.set_text('Это место уже занято')
                         dragged_part = None
                         return
                     captcha_images[dragged_part].move(captcha_slots[expected_part]).props('draggable=false')
-                    placed_parts.add(expected_part)
+                    placed_parts[expected_part] = dragged_part
                     dragged_part = None
-                    captcha_msg.set_text(
-                        'Капча пройдена' if len(placed_parts) == len(PARTS)
-                        else f'Правильно: {len(placed_parts)}/{len(PARTS)}'
-                    )
+                    if len(placed_parts) != len(PARTS):
+                        captcha_msg.set_text(f'Размещено: {len(placed_parts)}/{len(PARTS)}')
+                        return
+                    if all(placed_parts.get(part) == part for part in PARTS):
+                        captcha_msg.set_text('Капча пройдена')
+                        return
+                    username = (name.value or '').strip().lower()
+                    rows = sql('SELECT captcha_attempts FROM users WHERE username=%s', (username,), True)
+                    if rows:
+                        captcha_tries = rows[0][0] + 1
+                        locked = captcha_tries >= 3
+                        sql('UPDATE users SET captcha_attempts=%s,locked=%s WHERE username=%s',
+                            (captcha_tries, locked, username))
+                        captcha_msg.set_text(
+                            LOCKED_MESSAGE if locked
+                            else f'Капча собрана неверно: {captcha_tries}/3'
+                        )
+                        if locked:
+                            msg.set_text(LOCKED_MESSAGE)
+                    else:
+                        captcha_msg.set_text('Неверно собранная капча засчитана только для существующего логина')
+                    reset_captcha()
 
-`drop_part` вызывается при отпускании картинки. `return` немедленно завершает функцию. При неправильном месте `set_text` меняет уже созданную подпись, `add` добавляет номер в множество, `move` переносит картинку в слот, а `props('draggable=false')` запрещает двигать правильную часть снова. Проверка `len(...) == len(...)` определяет, собрана ли вся капча.
+`drop_part` вызывается при отпускании картинки. Если слот уже есть в `placed_parts`, новая картинка туда не ставится. Словарь хранит номер слота и номер детали, поэтому одна деталь не может занять уже заполненное место. После заполнения четырёх слотов программа сравнивает каждую пару. Неверная полная сборка увеличивает `captcha_attempts`, а после третьей такой сборки устанавливает `locked`.
 
-### 10.8. Создание изображений, слотов и сброс
+### 10.9. Создание изображений, слотов и сброс
 
-                for part in PARTS:
+                for part in DISPLAY_ORDER:
                     image = ui.image(str(PICTURES / f'{part}.png')).style(image_style).props('draggable=true')
                     captcha_images[part] = image
                     image.on('dragstart', lambda event, p=part: start_drag(event, p))
@@ -531,12 +608,14 @@ def app():
 
                 ui.button('Сбросить капчу', on_click=reset_captcha)
 
-`values()` перебирает объекты словаря. `clear()` у множества удаляет все элементы. Функция возвращает картинки, снова включает перетаскивание и возвращает исходное сообщение. Кнопка запускает её через `on_click`.
+`values()` перебирает объекты словаря. `clear()` у словаря удаляет все пары занятых слотов. Функция возвращает картинки, снова включает перетаскивание и возвращает исходное сообщение. Кнопка запускает её через `on_click`.
 
-### 10.9. Проверка входа
+### 10.10. Проверка входа
 
             def enter():
-                if len(placed_parts) != len(PARTS):
+                if len(placed_parts) != len(PARTS) or not all(
+                    placed_parts.get(part) == part for part in PARTS
+                ):
                     msg.set_text('Сначала правильно соберите пазл')
                     return
                 password_error(pwd)
@@ -552,33 +631,37 @@ def app():
                     msg.set_text('Неверный логин или пароль')
                     return
                 user, saved, admin, locked, tries = rows[0]
-                if locked: msg.set_text('Пользователь заблокирован'); return
+                if locked: msg.set_text(LOCKED_MESSAGE); return
                 if pwd.value != saved:
                     password_error(pwd, 'Неверный пароль')
                     tries += 1
+                    locked = tries >= 3
                     sql('UPDATE users SET failed_attempts=%s,locked=%s WHERE username=%s',
-                        (tries, tries >= 3, user))
-                    msg.set_text('Пользователь заблокирован' if tries >= 3 else f'Неверный пароль: {tries}/3')
-                elif admin: admin_page()
+                        (tries, locked, user))
+                    msg.set_text(LOCKED_MESSAGE if locked else f'Неверный пароль: {tries}/3')
+                elif admin:
+                    sql('UPDATE users SET failed_attempts=0,captcha_attempts=0 WHERE username=%s', (user,))
+                    admin_page()
                 else:
-                    sql('UPDATE users SET failed_attempts=0 WHERE username=%s', (user,))
+                    sql('UPDATE users SET failed_attempts=0,captcha_attempts=0 WHERE username=%s', (user,))
                     user_page()
             ui.button('Войти', on_click=enter)
 
 Порядок работы:
 
-1. Проверяется, что в `placed_parts` четыре номера.
+1. Проверяется, что в `placed_parts` заняты все четыре слота и каждая деталь стоит на своём месте.
 2. Старое сообщение ошибки очищается вызовом уже описанной `password_error`.
 3. `pwd.value` получает значение поля. `or ''` заменяет `None` пустой строкой, `strip()` убирает пробелы.
 4. SQL выбирает пользователя по логину. `lower()` приводит логин к нижнему регистру.
 5. Если `rows` пуст, пользователь не найден.
 6. `rows[0]` берёт первую строку результата, а присваивание раскладывает пять значений по переменным.
-7. Если `locked` истинен, вход прекращается.
+7. Если `locked` истинен, показывается сообщение `Вы заблокированы. Обратитесь к администратору`.
 8. Неверный пароль увеличивает `tries`. `tries >= 3` даёт Boolean для поля `locked`.
-9. При правильном пароле администратор получает `admin_page()`, обычный пользователь — `user_page()`.
-10. `ui.button(..., on_click=enter)` создаёт кнопку и связывает её с функцией.
+9. При правильном пароле оба счётчика ошибок сбрасываются в `0`.
+10. Затем администратор получает `admin_page()`, обычный пользователь — `user_page()`.
+11. `ui.button(..., on_click=enter)` создаёт кнопку и связывает её с функцией.
 
-### 10.10. Страница обычного пользователя
+### 10.11. Страница обычного пользователя
 
     def user_page():
         box.clear()
@@ -588,7 +671,7 @@ def app():
 
 Функция очищает контейнер, создаёт сообщение и кнопку. При нажатии кнопка вызывает уже созданную `login`.
 
-### 10.11. Панель администратора: форма
+### 10.12. Панель администратора: форма
 
     def admin_page():
         box.clear()
@@ -596,6 +679,7 @@ def app():
             ui.label('Пользователи').style(centered)
             editor = ui.column().style('width:100%;gap:8px')
             with editor:
+                editor_title = ui.label('Создание пользователя').style(centered)
                 edit_name, edit_password = input_field('Логин'), input_field('Пароль', True)
                 form_msg = ui.label().style(centered)
                 actions = ui.row().style('width:100%;justify-content:center;gap:8px')
@@ -603,11 +687,12 @@ def app():
 
             editing_id = None
 
-Создаются заголовок, поля редактирования, сообщение, ряд кнопок и контейнер списка. `editing_id = None` означает создание нового пользователя.
+Создаются заголовок, подпись режима, поля редактирования, сообщение, ряд кнопок и контейнер списка. `editor_title` сначала показывает `Создание пользователя`, а `editing_id = None` означает создание нового пользователя.
 
             def reset_editor():
                 nonlocal editing_id
                 editing_id = None
+                editor_title.set_text('Создание пользователя')
                 edit_name.value = ''
                 edit_password.value = ''
                 form_msg.set_text('')
@@ -615,13 +700,13 @@ def app():
             def edit_user(uid, user):
                 nonlocal editing_id
                 editing_id = uid
+                editor_title.set_text('Изменение пользователя')
                 edit_name.value = user
                 edit_password.value = ''
                 form_msg.set_text('Изменение пользователя')
 
-`reset_editor` очищает значения полей и сообщение. `edit_user` запоминает идентификатор и логин выбранной записи. Свойство `.value` читает или изменяет значение поля.
-
-### 10.12. Панель администратора: сохранение
+`reset_editor` возвращает подпись в режим `Создание пользователя`, очищает значения полей и сообщение. `edit_user` меняет подпись на `Изменение пользователя`, запоминает идентификатор и логин выбранной записи. Свойство `.value` читает или изменяет значение поля.
+### 10.13. Панель администратора: сохранение
 
             def save_user():
                 user = (edit_name.value or '').strip().lower()
@@ -651,7 +736,7 @@ def app():
 
 `if not 3 <= len(user) <= 32` проверяет длину логина. `try` начинает блок, в котором возможна ошибка базы. В режиме создания выполняется `INSERT`, в режиме изменения `UPDATE`. Если пароль пуст, старый пароль сохраняется. `except` ловит ошибку уникального логина. `load()` обновляет список.
 
-### 10.13. Панель администратора: список
+### 10.14. Панель администратора: список
 
             def load():
                 users.clear()
@@ -686,9 +771,9 @@ def app():
             ui.button('Выйти', on_click=login).style('width:112px')
             load()
 
-Если пользователь заблокирован, `change` сбрасывает счётчик и `locked`. Иначе удаляется только строка с `is_admin=FALSE`. Затем список загружается заново. Кнопки запускают сохранение, очистку и выход.
+Если пользователь заблокирован, `change` сбрасывает оба счётчика и `locked`. Иначе удаляется только строка с `is_admin=FALSE`. Затем список загружается заново. Кнопки запускают сохранение, очистку и выход.
 
-### 10.14. Завершение файла
+### 10.15. Завершение файла
 
 После всех функций, но внутри `app`, добавьте:
 
@@ -705,11 +790,12 @@ ui.page('/')(app)
 Последний блок:
 
 if __name__ in {'__main__', '__mp_main__'}:
+    ensure_schema()
     ui.run(title='Авторизация', port=8080)
 
-`__name__` показывает способ запуска файла. Условие разрешает запуск сервера при прямом запуске `python main.py`. `ui.run` запускает NiceGUI с заголовком и портом `8080`.
+`__name__` показывает способ запуска файла. Условие разрешает запуск сервера при прямом запуске `python main.py`. `ensure_schema()` добавляет недостающий столбец счётчика капч в старую базу. `ui.run` запускает NiceGUI с заголовком и портом `8080`.
 
-### 10.15. Проверка отступов
+### 10.16. Проверка отступов
 
 Внутри `app` должны находиться с отступом:
 
@@ -751,10 +837,13 @@ NiceGUI ready to go on http://localhost:8080
 2. Войдите как `admin` с паролем `AdminPassword`.
 3. Добавьте обычного пользователя в панели.
 4. Три раза введите неверный пароль.
-5. Убедитесь, что пользователь заблокирован.
+5. Убедитесь, что появилось сообщение `Вы заблокированы. Обратитесь к администратору`.
 6. Нажмите **Разблокировать**.
-7. Проверьте повторный вход.
-8. Проверьте изменение, удаление и сброс капчи.
+7. Соберите капчу неправильно три раза: каждый фрагмент можно ставить в любое свободное место, но занятое место повторно выбрать нельзя.
+8. Убедитесь, что пользователь снова заблокирован тем же сообщением.
+9. Нажмите **Разблокировать** и войдите с правильным паролем.
+10. Убедитесь, что после успешной авторизации счётчики неправильных паролей и капч сбросились.
+11. Проверьте изменение, удаление и кнопку сброса капчи.
 
 ---
 

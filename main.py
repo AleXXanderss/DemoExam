@@ -5,11 +5,20 @@ from pathlib import Path
 DB = 'postgresql://postgres:Admin@localhost:5432/demoekz'
 PICTURES = Path(__file__).parent / 'pictures'
 PARTS = range(1, 5)
+DISPLAY_ORDER = (1, 3, 2, 4)
+LOCKED_MESSAGE = 'Вы заблокированы. Обратитесь к администратору'
 
 def sql(q, p=(), many=False):
     with psycopg.connect(DB) as c:
         r = c.execute(q, p)
         return r.fetchall() if many else None
+
+def ensure_schema():
+    with psycopg.connect(DB) as c:
+        c.execute(
+            'ALTER TABLE users '
+            'ADD COLUMN IF NOT EXISTS captcha_attempts INTEGER NOT NULL DEFAULT 0'
+        )
 
 def password_error(field, text=None):
     field.props(remove='error error-message') if text is None else field.props(
@@ -35,7 +44,7 @@ def app():
             msg = ui.label(note).style(centered)
 
             dragged_part = None
-            placed_parts = set()
+            placed_parts = {}
             captcha_msg = ui.label('Перетащите фрагменты на свои места').style(centered)
             captcha_area = ui.column().style('width:100%;gap:12px;align-items:center')
             image_style = (
@@ -67,19 +76,37 @@ def app():
                     nonlocal dragged_part
                     if dragged_part is None:
                         return
-                    if dragged_part != expected_part:
-                        captcha_msg.set_text('Неверное место. Попробуйте еще раз')
+                    if expected_part in placed_parts:
+                        captcha_msg.set_text('Это место уже занято')
                         dragged_part = None
                         return
                     captcha_images[dragged_part].move(captcha_slots[expected_part]).props('draggable=false')
-                    placed_parts.add(expected_part)
+                    placed_parts[expected_part] = dragged_part
                     dragged_part = None
-                    captcha_msg.set_text(
-                        'Капча пройдена' if len(placed_parts) == len(PARTS)
-                        else f'Правильно: {len(placed_parts)}/{len(PARTS)}'
-                    )
+                    if len(placed_parts) != len(PARTS):
+                        captcha_msg.set_text(f'Размещено: {len(placed_parts)}/{len(PARTS)}')
+                        return
+                    if all(placed_parts.get(part) == part for part in PARTS):
+                        captcha_msg.set_text('Капча пройдена')
+                        return
+                    username = (name.value or '').strip().lower()
+                    rows = sql('SELECT captcha_attempts FROM users WHERE username=%s', (username,), True)
+                    if rows:
+                        captcha_tries = rows[0][0] + 1
+                        locked = captcha_tries >= 3
+                        sql('UPDATE users SET captcha_attempts=%s,locked=%s WHERE username=%s',
+                            (captcha_tries, locked, username))
+                        captcha_msg.set_text(
+                            LOCKED_MESSAGE if locked
+                            else f'Капча собрана неверно: {captcha_tries}/3'
+                        )
+                        if locked:
+                            msg.set_text(LOCKED_MESSAGE)
+                    else:
+                        captcha_msg.set_text('Неверно собранная капча засчитана только для существующего логина')
+                    reset_captcha()
 
-                for part in PARTS:
+                for part in DISPLAY_ORDER:
                     image = ui.image(str(PICTURES / f'{part}.png')).style(image_style).props('draggable=true')
                     captcha_images[part] = image
                     image.on('dragstart', lambda event, p=part: start_drag(event, p))
@@ -102,7 +129,9 @@ def app():
                 ui.button('Сбросить капчу', on_click=reset_captcha)
 
             def enter():
-                if len(placed_parts) != len(PARTS):
+                if len(placed_parts) != len(PARTS) or not all(
+                    placed_parts.get(part) == part for part in PARTS
+                ):
                     msg.set_text('Сначала правильно соберите пазл')
                     return
                 password_error(pwd)
@@ -118,16 +147,19 @@ def app():
                     msg.set_text('Неверный логин или пароль')
                     return
                 user, saved, admin, locked, tries = rows[0]
-                if locked: msg.set_text('Пользователь заблокирован'); return
+                if locked: msg.set_text(LOCKED_MESSAGE); return
                 if pwd.value != saved:
                     password_error(pwd, 'Неверный пароль')
                     tries += 1
+                    locked = tries >= 3
                     sql('UPDATE users SET failed_attempts=%s,locked=%s WHERE username=%s',
-                        (tries, tries >= 3, user))
-                    msg.set_text('Пользователь заблокирован' if tries >= 3 else f'Неверный пароль: {tries}/3')
-                elif admin: admin_page()
+                        (tries, locked, user))
+                    msg.set_text(LOCKED_MESSAGE if locked else f'Неверный пароль: {tries}/3')
+                elif admin:
+                    sql('UPDATE users SET failed_attempts=0,captcha_attempts=0 WHERE username=%s', (user,))
+                    admin_page()
                 else:
-                    sql('UPDATE users SET failed_attempts=0 WHERE username=%s', (user,))
+                    sql('UPDATE users SET failed_attempts=0,captcha_attempts=0 WHERE username=%s', (user,))
                     user_page()
             ui.button('Войти', on_click=enter)
 
@@ -140,9 +172,10 @@ def app():
     def admin_page():
         box.clear()
         with box:
-            ui.label('Пользователи').style(centered)
+            ui.label('Пользователи').style(f'{centered};font-size:18px')
             editor = ui.column().style('width:100%;gap:8px')
             with editor:
+                editor_title = ui.label('Создание пользователя').style(centered)
                 edit_name, edit_password = input_field('Логин'), input_field('Пароль', True)
                 form_msg = ui.label().style(centered)
                 actions = ui.row().style('width:100%;justify-content:center;gap:8px')
@@ -153,6 +186,7 @@ def app():
             def reset_editor():
                 nonlocal editing_id
                 editing_id = None
+                editor_title.set_text('Создание пользователя')
                 edit_name.value = ''
                 edit_password.value = ''
                 form_msg.set_text('')
@@ -160,6 +194,7 @@ def app():
             def edit_user(uid, user):
                 nonlocal editing_id
                 editing_id = uid
+                editor_title.set_text('Изменение пользователя')
                 edit_name.value = user
                 edit_password.value = ''
                 form_msg.set_text('Изменение пользователя')
@@ -208,7 +243,7 @@ def app():
                                 ui.element('div')
             def change(uid, locked):
                 if locked:
-                    sql('UPDATE users SET failed_attempts=0,locked=FALSE WHERE id=%s', (uid,))
+                    sql('UPDATE users SET failed_attempts=0,captcha_attempts=0,locked=FALSE WHERE id=%s', (uid,))
                 else:
                     sql('DELETE FROM users WHERE id=%s AND is_admin=FALSE', (uid,))
                 load()
@@ -223,4 +258,5 @@ def app():
 ui.page('/')(app)
 
 if __name__ in {'__main__', '__mp_main__'}:
+    ensure_schema()
     ui.run(title='Авторизация', port=8080)
