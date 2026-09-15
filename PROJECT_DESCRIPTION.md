@@ -15,7 +15,7 @@
 1. **Python**
     - идентификатор: `ms-python.python`;
     - издатель: **Microsoft**;
-    - нужен для запуска Python, выбора интерпретатора, запуска файлов и работы с `.venv`.
+    - нужен для запуска Python, выбора интерпретатора и запуска файлов.
 
 2. **Pylance**
     - идентификатор: `ms-python.vscode-pylance`;
@@ -30,7 +30,7 @@
 4. Перезапустите VS Code, если он предложит это сделать.
 5. Откройте папку проекта через **File -> Open Folder**.
 
-Отдельное расширение PostgreSQL для этого проекта не требуется: базу данных, таблицу и тестовые записи мы создаём через установленный pgAdmin 4. После установки расширения Python интерпретатор `.venv` выбирается в разделе 8.
+Отдельное расширение PostgreSQL для этого проекта не требуется: базу данных, таблицу и тестовые записи мы создаём через установленный pgAdmin 4.
 
 ---
 
@@ -89,7 +89,6 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash TEXT NOT NULL,
     is_admin BOOLEAN NOT NULL DEFAULT FALSE,
     failed_attempts INTEGER NOT NULL DEFAULT 0,
-    captcha_attempts INTEGER NOT NULL DEFAULT 0,
     is_locked BOOLEAN NOT NULL DEFAULT FALSE
 );
 
@@ -105,7 +104,6 @@ CREATE TABLE IF NOT EXISTS users (
 - `password_hash` хранит пароль учебной версии;
 - `is_admin` имеет тип Boolean и равен `TRUE` только у администратора;
 - `failed_attempts` считает неверные попытки;
-- `captcha_attempts` считает неверно собранные капчи;
 - `is_locked` показывает, заблокирован ли пользователь;
 - `DEFAULT FALSE` задаёт значение `FALSE`, если его не передали.
 
@@ -120,14 +118,12 @@ INSERT INTO users (
     password_hash,
     is_admin,
     failed_attempts,
-    captcha_attempts,
     is_locked
 )
 VALUES (
     'admin',
     'AdminPassword',
     TRUE,
-    0,
     0,
     FALSE
 )
@@ -147,14 +143,12 @@ INSERT INTO users (
     password_hash,
     is_admin,
     failed_attempts,
-    captcha_attempts,
     is_locked
 )
 VALUES (
     'user1',
     'UserPassword1',
     FALSE,
-    0,
     0,
     FALSE
 )
@@ -195,11 +189,11 @@ NiceGuiDBekz/
 - `3.png` — левый нижний;
 - `4.png` — правый нижний.
 
-Картинки нельзя помещать внутрь `.venv`.
+Картинки должны находиться в папке `pictures` рядом с `main.py`.
 
 ---
 
-## 6. Создание виртуального окружения
+## 6. Открытие терминала и установка библиотек
 
 Откройте **Terminal -> New Terminal** в VS Code.
 
@@ -207,31 +201,9 @@ NiceGuiDBekz/
 
 cd C:\Users\ВашеИмя\NiceGuiDBekz
 
-Создайте окружение:
+## 7. Установка библиотек
 
-python -m venv .venv
-
-Здесь `python -m venv` запускает встроенный модуль Python для создания изолированного окружения, а `.venv` — имя папки окружения.
-
-Активируйте его:
-
-.\.venv\Scripts\Activate.ps1
-
-После успешной активации в начале строки терминала появится `(.venv)`.
-
-Если PowerShell запрещает запуск скриптов, один раз выполните:
-
-Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
-
-Подтвердите `Y`, затем снова выполните:
-
-.\.venv\Scripts\Activate.ps1
-
----
-
-## 7. Установка двух библиотек
-
-Отдельный файл `requirements.txt` для этого проекта не нужен. Библиотек всего две, поэтому установите их отдельными командами в активированное `.venv`.
+В этом проекте виртуальное окружение создавать не нужно. Библиотеки устанавливаются в выбранный в VS Code Python через обычный терминал.
 
 Первая библиотека создаёт веб-интерфейс:
 
@@ -241,7 +213,7 @@ python -m pip install nicegui
 
 python -m pip install "psycopg[binary]"
 
-`python -m pip` означает: запустить `pip` именно через тот Python, который сейчас выбран. Поэтому пакеты попадут в активированное `.venv`.
+`python -m pip` запускает `pip` именно через тот Python, который будет использоваться командой `python main.py`.
 
 Проверка установки:
 
@@ -251,11 +223,11 @@ python -c "from nicegui import ui; import psycopg; print('Библиотеки �
 
 ---
 
-## 8. Выбор Python в VS Code
+## 8. Проверка Python в VS Code
 
 1. Нажмите `Ctrl+Shift+P`.
 2. Выполните команду **Python: Select Interpreter**.
-3. Выберите `.venv\Scripts\python.exe`.
+3. Выберите обычный установленный Python, например `Python 3.x`.
 
 VS Code должен использовать тот же Python, куда установлены NiceGUI и psycopg.
 
@@ -404,11 +376,8 @@ rows = sql(
 
 def ensure_schema():
     with psycopg.connect(DB) as c:
-        c.execute(
-            'ALTER TABLE users '
-            'ADD COLUMN IF NOT EXISTS captcha_attempts INTEGER NOT NULL DEFAULT 0'
-        )
-`ensure_schema` нужна для уже существующих баз, созданных до добавления счётчика капч. `ADD COLUMN IF NOT EXISTS` добавляет столбец только при его отсутствии, поэтому повторный запуск безопасен. Если столбец уже есть, PostgreSQL ничего не меняет.
+        c.execute('ALTER TABLE users DROP COLUMN IF EXISTS captcha_attempts')
+`ensure_schema` удаляет устаревший столбец `captcha_attempts` из старой базы. Все неудачные попытки теперь учитываются только в `failed_attempts`.
 
 ### 10.5. Функция ошибки пароля
 
@@ -565,26 +534,12 @@ def app():
                         captcha_msg.set_text(f'Размещено: {len(placed_parts)}/{len(PARTS)}')
                         return
                     if all(placed_parts.get(part) == part for part in PARTS):
-                        captcha_msg.set_text('Капча пройдена')
+                        captcha_msg.set_text('Капча собрана, нажмите «Войти»')
                         return
-                    username = (name.value or '').strip().lower()
-                    rows = sql('SELECT captcha_attempts FROM users WHERE username=%s', (username,), True)
-                    if rows:
-                        captcha_tries = rows[0][0] + 1
-                        is_locked = captcha_tries >= 3
-                        sql('UPDATE users SET captcha_attempts=%s,is_locked=%s WHERE username=%s',
-                            (captcha_tries, is_locked, username))
-                        captcha_msg.set_text(
-                            LOCKED_MESSAGE if is_locked
-                            else f'Капча собрана неверно: {captcha_tries}/3'
-                        )
-                        if is_locked:
-                            msg.set_text(LOCKED_MESSAGE)
-                    else:
-                        captcha_msg.set_text('Неверно собранная капча засчитана только для существующего логина')
+                    captcha_msg.set_text('Капча собрана неверно')
                     reset_captcha()
 
-`drop_part` вызывается при отпускании картинки. Если слот уже есть в `placed_parts`, новая картинка туда не ставится. Словарь хранит номер слота и номер детали, поэтому одна деталь не может занять уже заполненное место. После заполнения четырёх слотов программа сравнивает каждую пару. Неверная полная сборка увеличивает `captcha_attempts`, а после третьей такой сборки устанавливает `is_locked`.
+`drop_part` только перемещает картинку и сохраняет выбранные места в `placed_parts`. Капча проверяется позже, при нажатии кнопки `Войти`.
 
 ### 10.9. Создание изображений, слотов и сброс
 
@@ -619,25 +574,32 @@ def app():
 ### 10.10. Проверка входа
 
             def enter():
-                if len(placed_parts) != len(PARTS) or not all(
-                    placed_parts.get(part) == part for part in PARTS
-                ):
-                    msg.set_text('Сначала правильно соберите пазл')
-                    return
                 password_error(pwd)
-                if not (pwd.value or '').strip():
-                    password_error(pwd, 'Введите пароль')
-                    msg.set_text('Введите пароль')
-                    return
+                username = (name.value or '').strip().lower()
                 rows = sql('''SELECT username,password_hash,is_admin,is_locked,failed_attempts
                               FROM users WHERE username=%s''',
-                           ((name.value or '').strip().lower(),), True)
+                           (username,), True)
                 if not rows:
                     password_error(pwd, 'Неверный логин или пароль')
                     msg.set_text('Неверный логин или пароль')
                     return
                 user, saved, admin, is_locked, tries = rows[0]
                 if is_locked: msg.set_text(LOCKED_MESSAGE); return
+                captcha_ok = len(placed_parts) == len(PARTS) and all(
+                    placed_parts.get(part) == part for part in PARTS
+                )
+                if not captcha_ok:
+                    tries += 1
+                    is_locked = tries >= 3
+                    sql('UPDATE users SET failed_attempts=%s,is_locked=%s WHERE username=%s',
+                        (tries, is_locked, user))
+                    msg.set_text(LOCKED_MESSAGE if is_locked else f'Неверная капча: {tries}/3')
+                    reset_captcha()
+                    return
+                if not (pwd.value or '').strip():
+                    password_error(pwd, 'Введите пароль')
+                    msg.set_text('Введите пароль')
+                    return
                 if pwd.value != saved:
                     password_error(pwd, 'Неверный пароль')
                     tries += 1
@@ -646,24 +608,24 @@ def app():
                         (tries, is_locked, user))
                     msg.set_text(LOCKED_MESSAGE if is_locked else f'Неверный пароль: {tries}/3')
                 elif admin:
-                    sql('UPDATE users SET failed_attempts=0,captcha_attempts=0 WHERE username=%s', (user,))
+                    sql('UPDATE users SET failed_attempts=0 WHERE username=%s', (user,))
                     admin_page()
                 else:
-                    sql('UPDATE users SET failed_attempts=0,captcha_attempts=0 WHERE username=%s', (user,))
+                    sql('UPDATE users SET failed_attempts=0 WHERE username=%s', (user,))
                     user_page()
             ui.button('Войти', on_click=enter)
 
 Порядок работы:
 
-1. Проверяется, что в `placed_parts` заняты все четыре слота и каждая деталь стоит на своём месте.
-2. Старое сообщение ошибки очищается вызовом уже описанной `password_error`.
-3. `pwd.value` получает значение поля. `or ''` заменяет `None` пустой строкой, `strip()` убирает пробелы.
-4. SQL выбирает пользователя по логину. `lower()` приводит логин к нижнему регистру.
-5. Если `rows` пуст, пользователь не найден.
-6. `rows[0]` берёт первую строку результата, а присваивание раскладывает пять значений по переменным.
-7. Если `is_locked` истинен, показывается сообщение `Вы заблокированы. Обратитесь к администратору`.
-8. Неверный пароль увеличивает `tries`. `tries >= 3` даёт Boolean для поля `is_locked`.
-9. При правильном пароле оба счётчика ошибок сбрасываются в `0`.
+1. Старое сообщение ошибки очищается вызовом уже описанной `password_error`.
+2. SQL выбирает пользователя по логину. `lower()` приводит логин к нижнему регистру.
+3. Если `rows` пуст, пользователь не найден.
+4. Если `is_locked` истинен, показывается сообщение `Вы заблокированы. Обратитесь к администратору`.
+5. Кнопка проверяет, что в `placed_parts` заняты все четыре слота и каждая деталь стоит на своём месте.
+6. Неверная капча увеличивает общий `failed_attempts`.
+7. Если капча верная, проверяется пароль. Неверный пароль увеличивает тот же `failed_attempts`.
+8. После третьей любой ошибки `is_locked` становится `TRUE`.
+9. При правильном пароле `failed_attempts` сбрасывается в `0`.
 10. Затем администратор получает `admin_page()`, обычный пользователь — `user_page()`.
 11. `ui.button(..., on_click=enter)` создаёт кнопку и связывает её с функцией.
 
@@ -777,7 +739,7 @@ def app():
             ui.button('Выйти', on_click=login).style('width:112px')
             load()
 
-Если пользователь заблокирован, `change` сбрасывает оба счётчика и `is_locked`. Иначе удаляется только строка с `is_admin=FALSE`. Затем список загружается заново. Кнопки запускают сохранение, очистку и выход.
+Если пользователь заблокирован, `change` сбрасывает `failed_attempts` и `is_locked`. Иначе удаляется только строка с `is_admin=FALSE`. Затем список загружается заново. Кнопки запускают сохранение, очистку и выход.
 
 ### 10.15. Завершение файла
 
@@ -799,7 +761,7 @@ if __name__ in {'__main__', '__mp_main__'}:
     ensure_schema()
     ui.run(title='Авторизация', port=8080)
 
-`__name__` показывает способ запуска файла. Условие разрешает запуск сервера при прямом запуске `python main.py`. `ensure_schema()` добавляет недостающий столбец счётчика капч в старую базу. `ui.run` запускает NiceGUI с заголовком и портом `8080`.
+`__name__` показывает способ запуска файла. Условие разрешает запуск сервера при прямом запуске `python main.py`. `ensure_schema()` удаляет устаревший столбец `captcha_attempts` из старой базы. `ui.run` запускает NiceGUI с заголовком и портом `8080`.
 
 ### 10.16. Проверка отступов
 
@@ -819,10 +781,9 @@ python -m py_compile main.py
 
 ## 11. Первый запуск
 
-Убедитесь, что PostgreSQL запущен, база `demoekz` и таблица `users` созданы, тестовые данные добавлены, картинки лежат в `pictures`, а `.venv` активирован.
+Убедитесь, что PostgreSQL запущен, база `demoekz` и таблица `users` созданы, тестовые данные добавлены, а картинки лежат в `pictures`.
 
 cd C:\Users\ВашеИмя\NiceGuiDBekz
-.\.venv\Scripts\Activate.ps1
 python main.py
 
 Откройте в браузере:
@@ -839,17 +800,14 @@ NiceGUI ready to go on http://localhost:8080
 
 ## 12. Проверка проекта
 
-1. Соберите капчу.
+1. Введите логин, соберите капчу и нажмите **Войти**.
 2. Войдите как `admin` с паролем `AdminPassword`.
 3. Добавьте обычного пользователя в панели.
-4. Три раза введите неверный пароль.
-5. Убедитесь, что появилось сообщение `Вы заблокированы. Обратитесь к администратору`.
+4. Проверьте смешанные ошибки: нажмите **Войти** с неверной капчей, затем с правильной капчей и неверным паролем.
+5. После трех любых ошибок одного пользователя убедитесь, что появляется сообщение `Вы заблокированы. Обратитесь к администратору`.
 6. Нажмите **Разблокировать**.
-7. Соберите капчу неправильно три раза: каждый фрагмент можно ставить в любое свободное место, но занятое место повторно выбрать нельзя.
-8. Убедитесь, что пользователь снова заблокирован тем же сообщением.
-9. Нажмите **Разблокировать** и войдите с правильным паролем.
-10. Убедитесь, что после успешной авторизации счётчики неправильных паролей и капч сбросились.
-11. Проверьте изменение, удаление и кнопку сброса капчи.
+7. Введите правильную капчу и пароль и убедитесь, что после успешного входа `failed_attempts` сбрасывается.
+8. Проверьте изменение, удаление и кнопку сброса капчи.
 
 ---
 
@@ -857,13 +815,13 @@ NiceGUI ready to go on http://localhost:8080
 
 ### `No module named 'nicegui'`
 
-Активируйте `.venv` и выполните:
+Выполните в терминале VS Code:
 
 python -m pip install nicegui
 
 ### `No module named 'psycopg'`
 
-Активируйте `.venv` и выполните:
+Выполните в терминале VS Code:
 
 python -m pip install "psycopg[binary]"
 

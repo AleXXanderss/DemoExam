@@ -15,10 +15,7 @@ def sql(q, p=(), many=False):
 
 def ensure_schema():
     with psycopg.connect(DB) as c:
-        c.execute(
-            'ALTER TABLE users '
-            'ADD COLUMN IF NOT EXISTS captcha_attempts INTEGER NOT NULL DEFAULT 0'
-        )
+        c.execute('ALTER TABLE users DROP COLUMN IF EXISTS captcha_attempts')
         c.execute('''
             DO $$
             BEGIN
@@ -49,7 +46,14 @@ def password_error(field, text=None):
     )
 
 def reset_attempts(username):
-    sql('UPDATE users SET failed_attempts=0,captcha_attempts=0 WHERE username=%s', (username,))
+    sql('UPDATE users SET failed_attempts=0 WHERE username=%s', (username,))
+
+def register_failure(username, attempts):
+    attempts += 1
+    is_locked = attempts >= 3
+    sql('UPDATE users SET failed_attempts=%s,is_locked=%s WHERE username=%s',
+        (attempts, is_locked, username))
+    return attempts, is_locked
 
 def app():
     centered = 'width:100%;text-align:center'
@@ -113,23 +117,9 @@ def app():
                         captcha_msg.set_text(f'Размещено: {len(placed_parts)}/{len(PARTS)}')
                         return
                     if all(placed_parts.get(part) == part for part in PARTS):
-                        captcha_msg.set_text('Капча пройдена')
+                        captcha_msg.set_text('Капча собрана, нажмите «Войти»')
                         return
-                    username = (name.value or '').strip().lower()
-                    rows = sql('SELECT captcha_attempts FROM users WHERE username=%s', (username,), True)
-                    if rows:
-                        captcha_tries = rows[0][0] + 1
-                        is_locked = captcha_tries >= 3
-                        sql('UPDATE users SET captcha_attempts=%s,is_locked=%s WHERE username=%s',
-                            (captcha_tries, is_locked, username))
-                        captcha_msg.set_text(
-                            LOCKED_MESSAGE if is_locked
-                            else f'Капча собрана неверно: {captcha_tries}/3'
-                        )
-                        if is_locked:
-                            msg.set_text(LOCKED_MESSAGE)
-                    else:
-                        captcha_msg.set_text('Неверно собранная капча засчитана только для существующего логина')
+                    captcha_msg.set_text('Капча собрана неверно')
                     reset_captcha()
 
                 for part in DISPLAY_ORDER:
@@ -155,31 +145,32 @@ def app():
                 ui.button('Сбросить капчу', on_click=reset_captcha)
 
             def enter():
-                if len(placed_parts) != len(PARTS) or not all(
-                    placed_parts.get(part) == part for part in PARTS
-                ):
-                    msg.set_text('Сначала правильно соберите пазл')
-                    return
                 password_error(pwd)
-                if not (pwd.value or '').strip():
-                    password_error(pwd, 'Введите пароль')
-                    msg.set_text('Введите пароль')
-                    return
+                username = (name.value or '').strip().lower()
                 rows = sql('''SELECT username,password_hash,is_admin,is_locked,failed_attempts
                               FROM users WHERE username=%s''',
-                           ((name.value or '').strip().lower(),), True)
+                           (username,), True)
                 if not rows:
                     password_error(pwd, 'Неверный логин или пароль')
                     msg.set_text('Неверный логин или пароль')
                     return
                 user, saved, admin, is_locked, tries = rows[0]
                 if is_locked: msg.set_text(LOCKED_MESSAGE); return
+                captcha_ok = len(placed_parts) == len(PARTS) and all(
+                    placed_parts.get(part) == part for part in PARTS
+                )
+                if not captcha_ok:
+                    tries, is_locked = register_failure(user, tries)
+                    msg.set_text(LOCKED_MESSAGE if is_locked else f'Неверная капча: {tries}/3')
+                    reset_captcha()
+                    return
+                if not (pwd.value or '').strip():
+                    password_error(pwd, 'Введите пароль')
+                    msg.set_text('Введите пароль')
+                    return
                 if pwd.value != saved:
                     password_error(pwd, 'Неверный пароль')
-                    tries += 1
-                    is_locked = tries >= 3
-                    sql('UPDATE users SET failed_attempts=%s,is_locked=%s WHERE username=%s',
-                        (tries, is_locked, user))
+                    tries, is_locked = register_failure(user, tries)
                     msg.set_text(LOCKED_MESSAGE if is_locked else f'Неверный пароль: {tries}/3')
                 elif admin:
                     reset_attempts(user)
@@ -269,7 +260,7 @@ def app():
                                 ui.element('div')
             def change(id_user, is_locked):
                 if is_locked:
-                    sql('UPDATE users SET failed_attempts=0,captcha_attempts=0,is_locked=FALSE WHERE id_user=%s', (id_user,))
+                    sql('UPDATE users SET failed_attempts=0,is_locked=FALSE WHERE id_user=%s', (id_user,))
                 else:
                     sql('DELETE FROM users WHERE id_user=%s AND is_admin=FALSE', (id_user,))
                 load()
