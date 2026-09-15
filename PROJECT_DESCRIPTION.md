@@ -84,23 +84,21 @@ CREATE DATABASE demoekz;
 3. Вставьте SQL:
 
 CREATE TABLE IF NOT EXISTS users (
-    id SERIAL PRIMARY KEY,
+    id_user SERIAL PRIMARY KEY,
     username VARCHAR(32) UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
     is_admin BOOLEAN NOT NULL DEFAULT FALSE,
     failed_attempts INTEGER NOT NULL DEFAULT 0,
     captcha_attempts INTEGER NOT NULL DEFAULT 0,
-    locked BOOLEAN NOT NULL DEFAULT FALSE
+    is_locked BOOLEAN NOT NULL DEFAULT FALSE
 );
 
-ALTER TABLE users
-ADD COLUMN IF NOT EXISTS captcha_attempts INTEGER NOT NULL DEFAULT 0;
 
 4. Нажмите **Execute** или клавишу `F5`.
 
 Разбор таблицы:
 
-- `id SERIAL PRIMARY KEY` автоматически создаёт уникальный номер строки;
+- `id_user SERIAL PRIMARY KEY` автоматически создаёт уникальный номер строки;
 - `username VARCHAR(32)` хранит логин длиной до 32 символов;
 - `UNIQUE` запрещает два одинаковых логина;
 - `NOT NULL` запрещает пустое значение;
@@ -108,7 +106,7 @@ ADD COLUMN IF NOT EXISTS captcha_attempts INTEGER NOT NULL DEFAULT 0;
 - `is_admin` имеет тип Boolean и равен `TRUE` только у администратора;
 - `failed_attempts` считает неверные попытки;
 - `captcha_attempts` считает неверно собранные капчи;
-- `locked` показывает, заблокирован ли пользователь;
+- `is_locked` показывает, заблокирован ли пользователь;
 - `DEFAULT FALSE` задаёт значение `FALSE`, если его не передали.
 
 ---
@@ -123,7 +121,7 @@ INSERT INTO users (
     is_admin,
     failed_attempts,
     captcha_attempts,
-    locked
+    is_locked
 )
 VALUES (
     'admin',
@@ -150,7 +148,7 @@ INSERT INTO users (
     is_admin,
     failed_attempts,
     captcha_attempts,
-    locked
+    is_locked
 )
 VALUES (
     'user1',
@@ -573,20 +571,20 @@ def app():
                     rows = sql('SELECT captcha_attempts FROM users WHERE username=%s', (username,), True)
                     if rows:
                         captcha_tries = rows[0][0] + 1
-                        locked = captcha_tries >= 3
-                        sql('UPDATE users SET captcha_attempts=%s,locked=%s WHERE username=%s',
-                            (captcha_tries, locked, username))
+                        is_locked = captcha_tries >= 3
+                        sql('UPDATE users SET captcha_attempts=%s,is_locked=%s WHERE username=%s',
+                            (captcha_tries, is_locked, username))
                         captcha_msg.set_text(
-                            LOCKED_MESSAGE if locked
+                            LOCKED_MESSAGE if is_locked
                             else f'Капча собрана неверно: {captcha_tries}/3'
                         )
-                        if locked:
+                        if is_locked:
                             msg.set_text(LOCKED_MESSAGE)
                     else:
                         captcha_msg.set_text('Неверно собранная капча засчитана только для существующего логина')
                     reset_captcha()
 
-`drop_part` вызывается при отпускании картинки. Если слот уже есть в `placed_parts`, новая картинка туда не ставится. Словарь хранит номер слота и номер детали, поэтому одна деталь не может занять уже заполненное место. После заполнения четырёх слотов программа сравнивает каждую пару. Неверная полная сборка увеличивает `captcha_attempts`, а после третьей такой сборки устанавливает `locked`.
+`drop_part` вызывается при отпускании картинки. Если слот уже есть в `placed_parts`, новая картинка туда не ставится. Словарь хранит номер слота и номер детали, поэтому одна деталь не может занять уже заполненное место. После заполнения четырёх слотов программа сравнивает каждую пару. Неверная полная сборка увеличивает `captcha_attempts`, а после третьей такой сборки устанавливает `is_locked`.
 
 ### 10.9. Создание изображений, слотов и сброс
 
@@ -631,22 +629,22 @@ def app():
                     password_error(pwd, 'Введите пароль')
                     msg.set_text('Введите пароль')
                     return
-                rows = sql('''SELECT username,password_hash,is_admin,locked,failed_attempts
+                rows = sql('''SELECT username,password_hash,is_admin,is_locked,failed_attempts
                               FROM users WHERE username=%s''',
                            ((name.value or '').strip().lower(),), True)
                 if not rows:
                     password_error(pwd, 'Неверный логин или пароль')
                     msg.set_text('Неверный логин или пароль')
                     return
-                user, saved, admin, locked, tries = rows[0]
-                if locked: msg.set_text(LOCKED_MESSAGE); return
+                user, saved, admin, is_locked, tries = rows[0]
+                if is_locked: msg.set_text(LOCKED_MESSAGE); return
                 if pwd.value != saved:
                     password_error(pwd, 'Неверный пароль')
                     tries += 1
-                    locked = tries >= 3
-                    sql('UPDATE users SET failed_attempts=%s,locked=%s WHERE username=%s',
-                        (tries, locked, user))
-                    msg.set_text(LOCKED_MESSAGE if locked else f'Неверный пароль: {tries}/3')
+                    is_locked = tries >= 3
+                    sql('UPDATE users SET failed_attempts=%s,is_locked=%s WHERE username=%s',
+                        (tries, is_locked, user))
+                    msg.set_text(LOCKED_MESSAGE if is_locked else f'Неверный пароль: {tries}/3')
                 elif admin:
                     sql('UPDATE users SET failed_attempts=0,captcha_attempts=0 WHERE username=%s', (user,))
                     admin_page()
@@ -663,8 +661,8 @@ def app():
 4. SQL выбирает пользователя по логину. `lower()` приводит логин к нижнему регистру.
 5. Если `rows` пуст, пользователь не найден.
 6. `rows[0]` берёт первую строку результата, а присваивание раскладывает пять значений по переменным.
-7. Если `locked` истинен, показывается сообщение `Вы заблокированы. Обратитесь к администратору`.
-8. Неверный пароль увеличивает `tries`. `tries >= 3` даёт Boolean для поля `locked`.
+7. Если `is_locked` истинен, показывается сообщение `Вы заблокированы. Обратитесь к администратору`.
+8. Неверный пароль увеличивает `tries`. `tries >= 3` даёт Boolean для поля `is_locked`.
 9. При правильном пароле оба счётчика ошибок сбрасываются в `0`.
 10. Затем администратор получает `admin_page()`, обычный пользователь — `user_page()`.
 11. `ui.button(..., on_click=enter)` создаёт кнопку и связывает её с функцией.
@@ -693,21 +691,21 @@ def app():
                 actions = ui.row().style('width:100%;justify-content:center;gap:8px')
             users = ui.column().style('width:100%;gap:8px')
 
-            editing_id = None
+            editing_id_user = None
 
-Создаются заголовок, подпись режима, поля редактирования, сообщение, ряд кнопок и контейнер списка. `editor_title` сначала показывает `Создание пользователя`, а `editing_id = None` означает создание нового пользователя.
+Создаются заголовок, подпись режима, поля редактирования, сообщение, ряд кнопок и контейнер списка. `editor_title` сначала показывает `Создание пользователя`, а `editing_id_user = None` означает создание нового пользователя.
 
             def reset_editor():
-                nonlocal editing_id
-                editing_id = None
+                nonlocal editing_id_user
+                editing_id_user = None
                 editor_title.set_text('Создание пользователя')
                 edit_name.value = ''
                 edit_password.value = ''
                 form_msg.set_text('')
 
-            def edit_user(uid, user):
-                nonlocal editing_id
-                editing_id = uid
+            def edit_user(id_user, user):
+                nonlocal editing_id_user
+                editing_id_user = id_user
                 editor_title.set_text('Изменение пользователя')
                 edit_name.value = user
                 edit_password.value = ''
@@ -722,18 +720,18 @@ def app():
                 if not 3 <= len(user) <= 32:
                     form_msg.set_text('Логин: от 3 до 32 символов')
                     return
-                if editing_id is None and not password:
+                if editing_id_user is None and not password:
                     form_msg.set_text('Введите пароль')
                     return
                 try:
-                    if editing_id is None:
+                    if editing_id_user is None:
                         sql('''INSERT INTO users(username,password_hash,is_admin)
                                VALUES(%s,%s,FALSE)''', (user, password))
                         result = 'Пользователь добавлен'
                     else:
-                        query = ('UPDATE users SET username=%s,password_hash=%s WHERE id=%s'
-                                 if password else 'UPDATE users SET username=%s WHERE id=%s')
-                        params = (user, password, editing_id) if password else (user, editing_id)
+                        query = ('UPDATE users SET username=%s,password_hash=%s WHERE id_user=%s'
+                                 if password else 'UPDATE users SET username=%s WHERE id_user=%s')
+                        params = (user, password, editing_id_user) if password else (user, editing_id_user)
                         sql(query, params)
                         result = 'Пользователь изменён'
                     reset_editor()
@@ -749,29 +747,29 @@ def app():
             def load():
                 users.clear()
                 with users:
-                    for uid, user, admin, locked in sql('SELECT id,username,is_admin,locked FROM users ORDER BY username', many=True):
+                    for id_user, user, admin, is_locked in sql('SELECT id_user,username,is_admin,is_locked FROM users ORDER BY username', many=True):
                         row = ui.row().style(
                             'width:100%;display:grid;grid-template-columns:minmax(0,1fr) 96px 112px;'
                             'gap:8px;align-items:center'
                         )
                         with row:
                             ui.label(user).style('overflow:hidden;text-overflow:ellipsis;white-space:nowrap')
-                            ui.button('Изменить', on_click=lambda _, i=uid, u=user: edit_user(i, u)).style('width:96px')
+                            ui.button('Изменить', on_click=lambda _, i=id_user, u=user: edit_user(i, u)).style('width:96px')
                             if not admin:
-                                ui.button('Разблокировать' if locked else 'Удалить',
-                                          on_click=lambda _, i=uid, l=locked: change(i, l)).style('width:112px')
+                                ui.button('Разблокировать' if is_locked else 'Удалить',
+                                          on_click=lambda _, i=id_user, l=is_locked: change(i, l)).style('width:112px')
                             else:
                                 ui.element('div')
 
-`users.clear()` очищает старый список. SQL возвращает четыре значения каждой строки. `row` — строка интерфейса. У администратора вместо кнопки удаления создаётся пустой `div`. `lambda` сохраняет обработчик для конкретного пользователя; параметры `i=uid`, `u=user` и `l=locked` фиксируют текущие значения цикла.
+`users.clear()` очищает старый список. SQL возвращает четыре значения каждой строки. `row` — строка интерфейса. У администратора вместо кнопки удаления создаётся пустой `div`. `lambda` сохраняет обработчик для конкретного пользователя; параметры `i=id_user`, `u=user` и `l=is_locked` фиксируют текущие значения цикла.
 
 Добавьте изменение и кнопки:
 
-            def change(uid, locked):
-                if locked:
-                    sql('UPDATE users SET failed_attempts=0,locked=FALSE WHERE id=%s', (uid,))
+            def change(id_user, is_locked):
+                if is_locked:
+                    sql('UPDATE users SET failed_attempts=0,is_locked=FALSE WHERE id_user=%s', (id_user,))
                 else:
-                    sql('DELETE FROM users WHERE id=%s AND is_admin=FALSE', (uid,))
+                    sql('DELETE FROM users WHERE id_user=%s AND is_admin=FALSE', (id_user,))
                 load()
             with actions:
                 ui.button('Сохранить', on_click=save_user).props('color=positive').style('width:112px')
@@ -779,7 +777,7 @@ def app():
             ui.button('Выйти', on_click=login).style('width:112px')
             load()
 
-Если пользователь заблокирован, `change` сбрасывает оба счётчика и `locked`. Иначе удаляется только строка с `is_admin=FALSE`. Затем список загружается заново. Кнопки запускают сохранение, очистку и выход.
+Если пользователь заблокирован, `change` сбрасывает оба счётчика и `is_locked`. Иначе удаляется только строка с `is_admin=FALSE`. Затем список загружается заново. Кнопки запускают сохранение, очистку и выход.
 
 ### 10.15. Завершение файла
 

@@ -19,11 +19,37 @@ def ensure_schema():
             'ALTER TABLE users '
             'ADD COLUMN IF NOT EXISTS captcha_attempts INTEGER NOT NULL DEFAULT 0'
         )
+        c.execute('''
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'users' AND column_name = 'locked'
+                ) AND NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'users' AND column_name = 'is_locked'
+                ) THEN
+                    ALTER TABLE users RENAME COLUMN locked TO is_locked;
+                END IF;
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'users' AND column_name = 'id'
+                ) AND NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'users' AND column_name = 'id_user'
+                ) THEN
+                    ALTER TABLE users RENAME COLUMN id TO id_user;
+                END IF;
+            END $$
+        ''')
 
 def password_error(field, text=None):
     field.props(remove='error error-message') if text is None else field.props(
         f'error error-message="{text}"'
     )
+
+def reset_attempts(username):
+    sql('UPDATE users SET failed_attempts=0,captcha_attempts=0 WHERE username=%s', (username,))
 
 def app():
     centered = 'width:100%;text-align:center'
@@ -93,14 +119,14 @@ def app():
                     rows = sql('SELECT captcha_attempts FROM users WHERE username=%s', (username,), True)
                     if rows:
                         captcha_tries = rows[0][0] + 1
-                        locked = captcha_tries >= 3
-                        sql('UPDATE users SET captcha_attempts=%s,locked=%s WHERE username=%s',
-                            (captcha_tries, locked, username))
+                        is_locked = captcha_tries >= 3
+                        sql('UPDATE users SET captcha_attempts=%s,is_locked=%s WHERE username=%s',
+                            (captcha_tries, is_locked, username))
                         captcha_msg.set_text(
-                            LOCKED_MESSAGE if locked
+                            LOCKED_MESSAGE if is_locked
                             else f'Капча собрана неверно: {captcha_tries}/3'
                         )
-                        if locked:
+                        if is_locked:
                             msg.set_text(LOCKED_MESSAGE)
                     else:
                         captcha_msg.set_text('Неверно собранная капча засчитана только для существующего логина')
@@ -139,27 +165,27 @@ def app():
                     password_error(pwd, 'Введите пароль')
                     msg.set_text('Введите пароль')
                     return
-                rows = sql('''SELECT username,password_hash,is_admin,locked,failed_attempts
+                rows = sql('''SELECT username,password_hash,is_admin,is_locked,failed_attempts
                               FROM users WHERE username=%s''',
                            ((name.value or '').strip().lower(),), True)
                 if not rows:
                     password_error(pwd, 'Неверный логин или пароль')
                     msg.set_text('Неверный логин или пароль')
                     return
-                user, saved, admin, locked, tries = rows[0]
-                if locked: msg.set_text(LOCKED_MESSAGE); return
+                user, saved, admin, is_locked, tries = rows[0]
+                if is_locked: msg.set_text(LOCKED_MESSAGE); return
                 if pwd.value != saved:
                     password_error(pwd, 'Неверный пароль')
                     tries += 1
-                    locked = tries >= 3
-                    sql('UPDATE users SET failed_attempts=%s,locked=%s WHERE username=%s',
-                        (tries, locked, user))
-                    msg.set_text(LOCKED_MESSAGE if locked else f'Неверный пароль: {tries}/3')
+                    is_locked = tries >= 3
+                    sql('UPDATE users SET failed_attempts=%s,is_locked=%s WHERE username=%s',
+                        (tries, is_locked, user))
+                    msg.set_text(LOCKED_MESSAGE if is_locked else f'Неверный пароль: {tries}/3')
                 elif admin:
-                    sql('UPDATE users SET failed_attempts=0,captcha_attempts=0 WHERE username=%s', (user,))
+                    reset_attempts(user)
                     admin_page()
                 else:
-                    sql('UPDATE users SET failed_attempts=0,captcha_attempts=0 WHERE username=%s', (user,))
+                    reset_attempts(user)
                     user_page()
             ui.button('Войти', on_click=enter)
 
@@ -181,19 +207,19 @@ def app():
                 actions = ui.row().style('width:100%;justify-content:center;gap:8px')
             users = ui.column().style('width:100%;gap:8px')
 
-            editing_id = None
+            editing_id_user = None
 
             def reset_editor():
-                nonlocal editing_id
-                editing_id = None
+                nonlocal editing_id_user
+                editing_id_user = None
                 editor_title.set_text('Создание пользователя')
                 edit_name.value = ''
                 edit_password.value = ''
                 form_msg.set_text('')
 
-            def edit_user(uid, user):
-                nonlocal editing_id
-                editing_id = uid
+            def edit_user(id_user, user):
+                nonlocal editing_id_user
+                editing_id_user = id_user
                 editor_title.set_text('Изменение пользователя')
                 edit_name.value = user
                 edit_password.value = ''
@@ -205,18 +231,18 @@ def app():
                 if not 3 <= len(user) <= 32:
                     form_msg.set_text('Логин: от 3 до 32 символов')
                     return
-                if editing_id is None and not password:
+                if editing_id_user is None and not password:
                     form_msg.set_text('Введите пароль')
                     return
                 try:
-                    if editing_id is None:
+                    if editing_id_user is None:
                         sql('''INSERT INTO users(username,password_hash,is_admin)
                                VALUES(%s,%s,FALSE)''', (user, password))
                         result = 'Пользователь добавлен'
                     else:
-                        query = ('UPDATE users SET username=%s,password_hash=%s WHERE id=%s'
-                                 if password else 'UPDATE users SET username=%s WHERE id=%s')
-                        params = (user, password, editing_id) if password else (user, editing_id)
+                        query = ('UPDATE users SET username=%s,password_hash=%s WHERE id_user=%s'
+                                 if password else 'UPDATE users SET username=%s WHERE id_user=%s')
+                        params = (user, password, editing_id_user) if password else (user, editing_id_user)
                         sql(query, params)
                         result = 'Пользователь изменён'
                     reset_editor()
@@ -228,24 +254,24 @@ def app():
             def load():
                 users.clear()
                 with users:
-                    for uid, user, admin, locked in sql('SELECT id,username,is_admin,locked FROM users ORDER BY username', many=True):
+                    for id_user, user, admin, is_locked in sql('SELECT id_user,username,is_admin,is_locked FROM users ORDER BY username', many=True):
                         row = ui.row().style(
                             'width:100%;display:grid;grid-template-columns:minmax(0,1fr) 96px 112px;'
                             'gap:8px;align-items:center'
                         )
                         with row:
                             ui.label(user).style('overflow:hidden;text-overflow:ellipsis;white-space:nowrap')
-                            ui.button('Изменить', on_click=lambda _, i=uid, u=user: edit_user(i, u)).style('width:96px')
+                            ui.button('Изменить', on_click=lambda _, i=id_user, u=user: edit_user(i, u)).style('width:96px')
                             if not admin:
-                                ui.button('Разблокировать' if locked else 'Удалить',
-                                          on_click=lambda _, i=uid, l=locked: change(i, l)).style('width:112px')
+                                ui.button('Разблокировать' if is_locked else 'Удалить',
+                                          on_click=lambda _, i=id_user, l=is_locked: change(i, l)).style('width:112px')
                             else:
                                 ui.element('div')
-            def change(uid, locked):
-                if locked:
-                    sql('UPDATE users SET failed_attempts=0,captcha_attempts=0,locked=FALSE WHERE id=%s', (uid,))
+            def change(id_user, is_locked):
+                if is_locked:
+                    sql('UPDATE users SET failed_attempts=0,captcha_attempts=0,is_locked=FALSE WHERE id_user=%s', (id_user,))
                 else:
-                    sql('DELETE FROM users WHERE id=%s AND is_admin=FALSE', (uid,))
+                    sql('DELETE FROM users WHERE id_user=%s AND is_admin=FALSE', (id_user,))
                 load()
             with actions:
                 ui.button('Сохранить', on_click=save_user).props('color=positive').style('width:112px')
