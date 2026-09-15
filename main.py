@@ -116,11 +116,7 @@ def app():
                     if len(placed_parts) != len(PARTS):
                         captcha_msg.set_text(f'Размещено: {len(placed_parts)}/{len(PARTS)}')
                         return
-                    if all(placed_parts.get(part) == part for part in PARTS):
-                        captcha_msg.set_text('Капча собрана, нажмите «Войти»')
-                        return
-                    captcha_msg.set_text('Капча собрана неверно')
-                    reset_captcha()
+                    captcha_msg.set_text('Капча собрана, нажмите «Войти»')
 
                 for part in DISPLAY_ORDER:
                     image = ui.image(str(PICTURES / f'{part}.png')).style(image_style).props('draggable=true')
@@ -162,7 +158,6 @@ def app():
                 if not captcha_ok:
                     tries, is_locked = register_failure(user, tries)
                     msg.set_text(LOCKED_MESSAGE if is_locked else f'Неверная капча: {tries}/3')
-                    reset_captcha()
                     return
                 if not (pwd.value or '').strip():
                     password_error(pwd, 'Введите пароль')
